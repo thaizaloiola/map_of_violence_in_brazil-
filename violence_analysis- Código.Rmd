@@ -1,0 +1,1248 @@
+---
+title: "APS - R para Ciênca dos Dados"
+author: "Kevin Saraiva, Thaíza Loiola e Yuri Freitas"
+date: "30/05/2022"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+# Introdução
+A violência contra a mulher é um tema em crescente debate público devido à sua abrangência e impacto na sociedade brasileira, bem como aos danos causados pela negligência em relação a ele em décadas anteriores. De acordo com dados do [Fórum Brasileiro de Segurança Pública](https://forumseguranca.org.br/wp-content/uploads/2022/03/violencia-contra-mulher-2021-v5.pdf), entre março de 2020 e dezembro de 2021 houve 2.451 feminicídios e 100.398 casos de estupro e estupro de vulneráveis de vítimas do gênero feminino. Em 2021, houve um decréscimo nos casos de feminício em 2,4% em relação ao ano anterior; entretanto, os casos de estupro crescerem em 3,7%. Em média, em 2021 uma mulher foi vítima de feminicídio no Brasil a cada 7 horas e de estupro a cada dez minutos.
+
+Além disso, a violência contra a mulher não se restringe à física ou sexual: as violências psicológica/moral, doméstica e, no caso infantojuvenil, negligência e abandono existem e são relevantes para compreender o conjunto de violências que aflingem as mulheres. Por esse motivo, investigar as possíveis causas e características do perfil da violência sofrida pelas mulheres no Brasil é relevante para o diagnóstico dessa conjuntura - e um bom diagnóstico é o passo inicial de políticas públicas que visam amenizar reduzir o impacto desse problema. Neste trabalho, pois, investigaremos como a violência contra a mulher se dá no Brasil, inicialmente com uma visão geral do cenário e fazendo comparações com a violência sofrida por homens para depois adentrarmos em mais detalhes acerca das características das violências sofridas pelo grupo social em questão.
+
+# Descrição da base de dados
+A base de dados utilizada para investigar sa origens e características da violência é a do Sistema de Informação de Agravos de Notificação (SINAN) que, desde 2007, centraliza as informações de doenças e agravos no Brasil. Além disso, desde 2009 o SINAN também registra dados de violência interpessoal (na qual uma ou mais pessoas inflingem violência em alguém) e autoprovocada (suicida) pelo Sistema de Vigilância de Violência e Acidentes (VIVA), que contém os dados que são usados neste trabalho.
+
+A [base extraída do SINAN](https://basedosdados.org/dataset/br-ms-sinan) contém mais de 150 variáveis que detalham violências sofridas por residentes do Brasil de 2009 a 2019, com informações a nível individual, constituindo um conjunto de microdados com mais de 2 milhões de linhas. Entre as informações disponíveis, há desde de dados genéricos sobre os pacientes que sofreram ou se autoinfligiram violência, como idade, sexo, raça, escolaridade e ocupação, até dados específicos, como qual foi o tipo de arma utilizada na violência; se houve violência psicológica, física ou sexual; motivação da violência; e a se houve coleta de fluídos corporais, como sangue, pela equipe de investigação do caso de violência.
+
+Com esses dados, é possível investigar se existem diferenças entre sexos, raças e outros subgrupos em relação à incidência da violência; verificar como os casos de violência evoluíram ao longo dos anos; entender características regionais da violência; e buscar correlações entre características das violências com diferentes tipos de grupos sociais.
+
+Um detalhe importante a ser ponderado é que o número de observações cresceu a cada ano - e embora não haja uma explicação oficial do site do SINAN, é provável que mais centros ambulatórios e de violência passaram a reportar seus dados ao SINAN, e não que houve um aumento expressivo na violência e nos acidentes a cada ano. Desse modo, fomos prudentes ao fazer análises temporais e evitamos comparações em números absolutos ao longo dos anos - quando uma análise temporal é feita, ela é colocada em termos relativos.
+
+Informações detalhadas sobre a metodologia do VIVA podem ser encontradas no [documento instrutivo da instituição](https://bvsms.saude.gov.br/bvs/publicacoes/viva_instrutivo_violencia_interpessoal_autoprovocada_2ed.pdf).
+
+# Análise
+
+## Importação das bibliotecas utilizadas
+```{r libraries, results='hide', message=FALSE, warning=FALSE}
+
+# Importação e manipulação de base de dados
+library("data.table")
+library("tidyverse")
+library("tibble")
+library("readxl")
+
+# Para facilitar a conversão de números no formato de porcentagem
+library("scales")
+
+# Para construir  a nuvem de palavras
+library("RColorBrewer")
+library("wordcloud2")
+library("tm")
+
+# Para construir o treemap
+library("treemap")
+
+# Para as random forests
+library("ranger")
+
+# Para o Boosting
+library("gbm")
+
+# Para avaliar os modelos gerados
+library("ROCR")
+library("pROC")
+
+# Para gráfico SANKEY DIAGRAM
+library("networkD3") 
+
+# Para gráfico Spider
+library("fmsb")  
+
+
+```
+
+## Importação da base de dados
+```{r wd}
+
+# Extração a base de dados a partir do diretório definido pelo usuário
+getwd()
+
+```
+
+Algumas colunas da base de dados foram removidas porque elas continham apenas o id, e não uma descrição do que a variável significa. Por exemplo: na variável "sexo_paciente", encontram-se os valores "1" para o sexo "masculino" e "2" para o sexo "feminino", mas essa forma de dispor a informação é pouco intuitiva e por isso a coluna foi removida. Entretanto, não há perda de informação para nenhuma das variáveis excluídas dado que as colunas com sufixo "_desc" contém as mesmas informações com a descrição, em português, do que cada um dos ids significam. Além disso, eliminamos algumas variáveis que não foram utilizadas na análise a fim de melhorar a performance computacional.
+
+```{r import_data, results='hide', message=FALSE, warning=FALSE}
+
+# Importação da base de dados no formato DataTable, mais rápido do que no formato DataFrame
+dt_violencia <- fread("total_microdados_viol_tratada.csv", showProgress = TRUE,
+                      na.strings = c("",NA),
+                      drop = c("outras_vezes_ocorrencia", 
+                               "sexo_paciente", "gestante_paciente",
+                               "raca_paciente", "estado_civil_paciente",
+                               "identidade_genero_paciente",
+                               "orientacao_sexual_paciente",
+                               "motivacao_violencia",
+                               "violencia_relacionada_trabalho", "emitiu_cat",
+                               "deficiencia_transtorno_paciente",
+                               "deficiencia_mental_paciente", 
+                               "deficiencia_visual_paciente", 
+                               "deficiencia_mental_paciente", 
+                               "deficiencia_auditiva_paciente",
+                               "transtorno_mental_paciente",
+                               "transtorno_comportamental_paciente",
+                               "outras_deficiencias_paciente",
+                               "ocorreu_tortura", "ocorreu_violencia_sexual",
+                               "ocorreu_trafico_ser_humano",
+                               "ocorreu_violencia_financeira",
+                               "ocorreu_trabalho_infantil",
+                               "ocorreu_intervencao_legal",
+                               "ocorreu_outra_violencia", "meio_forca",
+                               "escolaridade_paciente",
+                               "deficiencia_fisica_paciente",
+                               "meio_ameaca",
+                               "houve_outra_violencia_sexual",
+                               "profilaxia_dst", "profilaxia_hiv",
+                               "profilaxia_hepatite_b", "coleta_sangue",
+                               "coleta_semen", "aborto",
+                               "local_ocorrencia_desc", "id_categoria_cid10",
+                               "tipo_notificacao", "ocorreu_negligencia",
+                               "ocorreu_negligencia_abandono", "emitiu_cat",
+                               "id_municipio_6_notificacao", 
+                               "outro_local_ocorrencia",
+                               "deficiencia_transtorno_paciente_desc",
+                               "deficiencia_mental_paciente_desc", 
+                               "deficiencia_visual_paciente_desc", 
+                               "deficiencia_mental_paciente_desc",
+                               "transtorno_mental_paciente_desc",
+                               "transtorno_comportamental_paciente_desc",
+                               "outras_deficiencias_paciente_desc",
+                               "proxila", "profilaxia_dst_desc", 
+                               "profilaxia_hiv_desc",
+                               "profilaxia_hepatite_b_desc",
+                               "coleta_sangue_desc", "coleta_semen_desc",
+                               "coleta_secrecao_vaginal",
+                               "coleta_secrecao_vaginal_desc",
+                               "profilaxia_contraceptivo",
+                               "profilaxia_contraceptivo_desc"))
+
+# O tempo de carregamento da base de dados é entre 2 e 3 minutos
+
+```
+
+```{r transform_tibble, results='hide'}
+
+# Converter do formato DataTable para o formato Tibble
+tb_violencia <- as_tibble(dt_violencia)
+
+# Remover o DataTable para evitar duplicidade de informações
+rm(dt_violencia)
+
+```
+
+Originalmente, a base de dados importada não contém a descrição das categorias e subcategorias das violências. Desse modo, é necessário fazer a mesclagem da tabela do SINAN com o dicionário de categorias e subcategorias do VIVA.
+
+```{r cid_cat_subcat}
+
+# Importação da base de dados com a descrição das categorias e subcategorias do VIVA
+cid_10_categorias = read_excel("cid_10_categorias_subcategorias.xlsx")
+cid_10_categorias <- cid_10_categorias %>% 
+  as_tibble(cid_10_categorias)
+
+
+```
+
+```{r cid_join}
+
+# Limpeza dos dados
+tb_violencia$id_subcategoria_cid10 <- sub('\\.','',tb_violencia$id_subcategoria_cid10)
+
+cid_10_categorias$subcategoria_cid <- sub('\\.','',cid_10_categorias$subcategoria_cid)
+
+# Mesclagem dos dados
+tb_violencia <- tb_violencia %>%
+  left_join(cid_10_categorias, 
+            by = c("id_subcategoria_cid10" = "subcategoria_cid"),
+            )
+
+```
+
+Também é feito uma junção a fim entender melhor a visão por região geográfica. Depois de realizar os *joins*, uma nova coluna é feita discriminando qual região cada estado pertence (Norte, Sul, Sudeste, Nordeste ou Centro-Oeste)
+
+```{r regiao}
+
+# Importação da base de dados da base de municipios do ibge
+municipio = read_excel("regioes_brasil_ibge.xlsx")
+municipio <- municipio %>%   as_tibble(municipio)
+
+# Separando valores de UF
+regiao <- municipio %>% subset(select=c('UF','Nome_UF')) %>% unique
+colnames(regiao) <- c('id_uf_notificacao','uf_notificacao')
+
+# Valores por municipio
+cidade <- municipio %>% subset(select = c('Nome_Mesorregião','Código Município Completo','Nome_Município') ) %>% unique
+colnames(cidade) <- c('mesoregiao_notificacao','id_municipio_notificacao','municipio_notificacao')
+
+
+```
+
+```{r regiao_join}
+
+# Mesclagem dos dados
+tb_violencia <- tb_violencia %>% left_join(regiao, by = 'id_uf_notificacao')
+tb_violencia<- tb_violencia %>% left_join(cidade, by = 'id_municipio_notificacao')
+
+```
+
+```{r regiao_mutate}
+
+tb_violencia <- tb_violencia %>%  mutate(regiao= ifelse(uf_notificacao %in% c('Paraná','Santa Catarina','Rio Grande do Sul'), 'Sul',
+                                                  ifelse(uf_notificacao %in% c('São Paulo','Rio de Janeiro','Espírito Santo','Minas Gerais'),'Sudeste',
+                                                  ifelse(uf_notificacao %in% c('Acre', 'Amazonas', 'Amapá', 'Pará', 'Rondônia', 'Roraima', 'Tocantins'),'Norte',
+                                                  ifelse(uf_notificacao %in% c('Alagoas', 'Bahia', 'Ceará', 'Maranhão', 'Piauí', 'Pernambuco', 'Paraíba', 'Rio Grande do Norte', 'Sergipe'),'Nordeste',
+                                                  ifelse(uf_notificacao %in% c('Centro Oeste','Goiás', 'Mato Grosso', 'Mato Grosso do Sul','Distrito Federal'),'Centro Oeste',NA
+                                                                       ))))))
+
+```
+
+## Distribuição dos dados
+
+Antes de iniciar as análises dos dados, é importante compreender como os dados se distribuem na base. É preciso investigar, por exemplo, quais as variáveis têm maiores e menores números de observações nulos, bem como entender se variáveis com alto percentual de NAs têm esse comportamento porque não foram coletadas nos anos iniciais da pesquisa ou porque de fato foram pouco preenchidas.
+
+```{r percentual_preenchimento}
+
+# Cria tabela com o percentual de preenchimento de cada variável
+percentual_preenchimento_col <- 
+  sapply(tb_violencia, function(x) sum(!is.na(x))/nrow(tb_violencia)) %>%
+  stack(.) %>% # Transforma em DataFrame
+  setNames(., c("percentual_preenchimento", "variavel")) %>%
+  mutate(percentual_preenchimento_formatado = percent(percentual_preenchimento, 0.01),
+        percentual_preenchimento = round(percentual_preenchimento, 4)) %>%
+    .[, c("variavel", "percentual_preenchimento_formatado", "percentual_preenchimento")] %>%
+  arrange(., desc(percentual_preenchimento))
+
+view(percentual_preenchimento_col)
+
+# Percentual de variáveis com menos de 20% de valores nulos 
+percent(length(which(percentual_preenchimento_col$percentual_preenchimento >= 0.8))/length(percentual_preenchimento_col$percentual_preenchimento), 0.01)
+  
+```
+
+```{r percentual_preenchimento_plot}
+# Definir o tema de plotagem dos gráficos globalmente
+theme_set(theme_bw())
+
+# Gráfico com o número de variáveis por percentual de valores não nulos
+percentual_preenchimento_col %>%
+    mutate(percentual_preenchimento = ifelse(percentual_preenchimento >= 0.8, "80% - 100%", ifelse(percentual_preenchimento >= 0.6, "60% - 80%", ifelse(percentual_preenchimento >= 0.4, "40% - 60%", ifelse(percentual_preenchimento >= 0.2, "20% - 40%", "0% - 20%"))))) %>%
+  group_by(percentual_preenchimento) %>%
+  summarise(contagem = n()) %>%
+   ggplot(aes(percentual_preenchimento, contagem, fill = percentual_preenchimento)) +
+         geom_col() +
+           coord_flip() +
+  geom_label(aes(y = c(2.5, 2, 2.5, 13.5, 57), label = contagem), label.padding = unit(0.3, "lines")) +
+         theme(legend.position = "none") +
+         labs(title = "Número de variáveis por percentual de valores não nulos",
+              x = "",
+              y = "Número de variáveis")
+
+```
+
+Nota-se que 74% (114) das variáveis têm menos de 20% de valores nulos. Dentro desse grupo, há variáveis fundamentais à análise, como sexo do paciente (99,96% de valores não nulos), idade (96,73%), raça (86,55%), e informações sobre o tipo de ocorrência e sobre o autor do crime. Por outro lado, as variáveis que descrevem em detalhes o tipo de violência (CID) têm apenas 20,48% de valores não nulos e devem ser usadas com parcimônia, pois elas possuem um grau de generalização menor. O mesmo cuidado é tomado com outras variáveis com baixa ocorrência, como orientação sexual do paciente (50,78%), motivação da violência (45,83%), ocupação do paciente (44,95%). Nos casos em que essas variáveis forem utilizadas, uma análise prévia é feita para avaliar se o elevado número de valores nulos é decorrente da inclusão da variável em anos posteriores ao início da pesquisa ou se é porque de fato é uma variável escassa.
+
+## Análise exploratória inicial
+ 
+```{r anos_racas_sexos}
+
+#cria um dataframe apenas com a quantidade de pacientes por ano
+anos_df <- tb_violencia %>% count(ano, sort = TRUE)
+
+#cria um dataframe apenas com a quantidade de pacientes por perfil racial
+racas_df <- tb_violencia %>% count(raca_paciente_desc, sort = TRUE)
+
+#cria um dataframe apenas com a quantidade de pacientes por gênero
+sexos_df <- tb_violencia %>% count(sexo_paciente_desc, sort = TRUE)
+ 
+```
+
+No gráfico abaixo temos a evolução no número de pacientes por ano. Conforme é possível ver, os valores subiram bastante ano a ano. Entretanto, é importante fazer um aviso sobre esse comportamento dos dados: uma das hipóteses é de que esse aumento tenha sido gerado em função da própria melhor documentação das ocorrências por parte do governo, haja vista a estrutura de coleta de dados um pouco mais rudimentar que o governo tinha na última década. Consequentemente, é possível que exista um viés de seleção nessa base, tendo em vista a melhor estrutura de dados que o governo passou a contar mais recentemente, podendo assim, documentar melhor os casos de violência.
+
+```{r numero_pacientes_ano}
+
+# Gráfico de barras com as quantidades de pacientes por ano
+anos_df %>%
+  modify_if(is.integer, as.character) %>%  
+  ggplot(aes_(x=anos_df$ano, y=anos_df$n, fill=anos_df$ano)) +
+  scale_x_continuous(breaks = 0:2100) +
+  scale_y_continuous(labels = comma) +
+  geom_bar(stat='identity') +
+  labs(x = "Ano",
+       y = "Quantidade de pacientes",
+       title = "Número de pacientes por ano",
+       subtitle = paste0("Valores absolutos de ", min(tb_violencia$ano), " até ", max(tb_violencia$ano)),
+       caption = "Fonte: SINAN") +
+  theme(legend.position = "none")
+
+```
+
+```{r agrupado_por_ano_sexo, message=FALSE, warning=FALSE}
+
+# DF com as quantidadades de pacientes agrupadas por gênero e ano
+grouped_by_ano_sexo <- tb_violencia[, c("sexo_paciente_desc", "ano")] %>% 
+  filter(sexo_paciente_desc != "") %>%
+  count(ano, sexo_paciente_desc, sort = FALSE) %>%
+  filter(across(everything(), ~ !is.na(.x))) 
+
+```
+
+Ademais, quando segmentamos os dados por sexo é possivel observar que em todos os anos há um expressivo número de pacientes mulheres em comparação ao de homens, o que nos leva a crer que pode haver um grupo específico que pode estar mais suscetível a enfrentar violencia. Porém, é cabível aqui fazer uma nova ponderação: pode ser que a base tenha viés de seleção, pois é possível que mulheres denunciem mais as violências sofridas do que homens. Essa distinção de abordagens pode, por si, só enviesar a base para transmitir uma informação um pouco diferente do que o que é a realidade.
+
+```{r casos_mulheres_homens_anos}
+
+# Gráfico de barras com as quantidades de pacientes por gênero por cada ano
+ggplot(grouped_by_ano_sexo, aes(fill=sexo_paciente_desc, y=n, x=ano)) +
+  geom_bar(position="stack", stat="identity") +
+  scale_x_continuous(breaks = 0:2100) +
+  scale_y_continuous(labels = comma) +
+  labs( x= "Ano", y= "Quantidade", color= "",
+        title = "Quantidade de pacientes por gênero e por ano",
+        subtitle = paste0("Valores absolutos de ", min(tb_violencia$ano), " até ", max(tb_violencia$ano)),
+        caption = "Fonte: SINAN",
+        fill = "Sexo") 
+
+```
+
+Ademais, quando olhamos os dados em valores absolutos, é possível notar que para todo o período o maior número de casos de violências reportadas foram vivenciados por pessoas brancas, seguidas das pessoas pardas. Neste espaço há também um outro risco de viés: pode ocorrer que as notificações não sejam adequadamente registradas para algum grupo etnico específico - por exemplo, pessoas pretas e pardas. Por sua vez, situações como essas podem contribuir para uma subnotificação, gerando também um viés de seleção nos dados. Ademais, é importante destacar que esses dados estão em valores absolutos e que seria interessante também observá-los de forma relativa em relação ao percentual da população que se autodeclara em cada tipo racial.
+
+```{r quantidade_pacientes_racas}
+
+racas_df$raca_paciente_desc <- as.character(racas_df$raca_paciente_desc) 
+
+# Gráfico de barras com as quantidades de pacientes por raça
+racas_df %>%
+  filter(raca_paciente_desc != "") %>%
+  ggplot(aes(x=reorder(raca_paciente_desc,n), 
+             y=n, 
+             fill=n,
+             na.rm = TRUE)) +
+  geom_bar(stat='identity') +
+  labs(x = "", y = "Quantidades", title = "Raça dos pacientes") +
+  coord_flip() +
+  theme(legend.position = "none") +
+  labs( x= "Raça", y= "Quantidade", color= "",
+        title = "Quantidade de pacientes por raça",
+        subtitle = paste0("Valores absolutos de ", min(tb_violencia$ano), " até ", max(tb_violencia$ano)),
+        caption = "Fonte: SINAN") 
+
+
+```
+
+Por sua vez, quando olhamos o perfil de pacientes por idade, é possível notar que de forma agregada há um pico de vítimas de violência em torno dos 17-25 anos de idade.
+
+```{r pacientes_idade}
+
+qtd_idades <- tb_violencia[, c('idade_paciente')] %>% count(idade_paciente, sort = FALSE)
+
+# Gráfico de barras com as quantidades de pacientes por idade
+ggplot(qtd_idades, aes(x=idade_paciente, y=n, fill=n)) +
+  geom_bar(stat='identity') +
+  theme(legend.position = "none") +
+  labs( x= "Idade", y= "Quantidade de pacientes", color= "",
+        title = "Quantidade de pacientes por idade",
+        subtitle = paste0("De ", min(tb_violencia$ano), " até ", max(tb_violencia$ano)),
+        caption = "Fonte: SINAN") +
+  xlim(0, 100)
+
+qtd_idades_por_ano <- tb_violencia[, c('idade_paciente','ano')] %>% 
+  group_by(ano, idade_paciente)
+
+```
+
+Quando fazemos a mesma verificação de frequência de ocorrências por idade segmentada por sexo é possível notar que o sexo feminino apresenta muito mais casos de vítimas de violência para uma mesma idade que homens na faixa dos 15 aos 65 anos de idade. Além disso, o padrão de quantidade de vítimas de violência passa a ser similar para homens bem como para mulheres nas demais faixas de idade.
+
+```{r pacientes_idade_genero, warnings=FALSE}
+
+# Gráfico de barras com as quantidades de pacientes por idade e genero
+tb_violencia %>%
+  filter(sexo_paciente_desc != "") %>%
+  ggplot(aes(x=idade_paciente, color=sexo_paciente_desc, fill=sexo_paciente_desc)) + 
+  #geom_histogram(aes(y=..density..), colour="black", fill="white") +
+  geom_histogram(position="identity", alpha=0.5) +
+  geom_density(alpha=.2, fill="#FF6666") +
+  #theme(legend.position = "none") +
+  labs( x= "Idade", y= "Quantidade de pacientes",# color= "",
+        title = "Quantidade de pacientes por idade e genero",
+        subtitle = paste0("Valores absolutos de ", min(tb_violencia$ano), " até ", max(tb_violencia$ano)),
+        caption = "Fonte: SINAN") 
+
+```
+
+Este outro gráfico nos mostra o *boxplot* dos casos de violência por ano. Com ele é possível notar que a mediana dos casos manteve-se numa faixa etária em torno dos 24 anos. Adicionalmente, as caixas são razoavelmente pequenas, o que significa que há muita concentração de cados em torno dos 15-30 anos de idade para todos os anos. Há também uma expressiva quantidade de *outliers* em idades mais avançadas para todos os anos do período estudado.
+
+```{r boxplot_idades_ano}
+
+# Boxplot com as quantidades de pacientes por idade 
+tb_violencia %>%
+  mutate(ano = as.character(ano)) %>%
+  ggplot(aes(x=ano, y=idade_paciente, fill=ano)) +
+  geom_boxplot() +
+  ggtitle("Idades média dos pacientes por ano") +
+  theme(legend.position = "none") +
+  labs( x= "Ano", y= "Idade", color= "",
+        title = "Idades média dos pacientes por ano",
+        subtitle = paste0("De ", min(tb_violencia$ano), " até ", max(tb_violencia$ano)),
+        caption = "Fonte: SINAN") 
+
+
+```
+
+E será que existe diferença significativa nos casos de violência reportados entre os sexos?
+
+```{r sex_viol_distribution}
+
+# Agrupar o número de casos por sexo para analisar o percentual
+sexos_tb <- tb_violencia %>%
+  count(sexo_paciente_desc, sort = TRUE, name = "casos") %>%
+  filter(sexo_paciente_desc != "" & !is.na(sexo_paciente_desc)) %>%
+  rename(., sexo = sexo_paciente_desc) %>%
+  mutate(percentual = casos/sum(casos),
+         ymax = cumsum(percentual),
+         ymin = c(0, head(ymax, n = -1)),
+         posicao = (ymax + ymin)/2,
+         legenda = paste(sexo, "\n", percent(percentual, 0.1)))
+
+```
+
+```{r sex_viol_distribution_plot}
+
+# Plotagem do gráfico
+ggplot(sexos_tb, aes(ymax = ymax, ymin = ymin, xmax = 3, xmin = 4, 
+                     fill = sexo)) +
+  geom_rect(color = "gray14") +
+  geom_label(x = 3.5, aes(y = posicao, label = legenda), size = 5.5,
+             color = "gray7") +
+  scale_fill_manual(values = c("#B385FF", "#00C1A7")) +
+  coord_polar(theta = "y") +
+  xlim(c(1.5, 4)) +
+  labs(title = "Distribuição dos pacientes por sexo",
+    subtitle = "De 2009 a 2019",
+    caption = "Fonte: SINAN") +
+  theme_void() +
+  theme(legend.position = "none")
+
+```
+
+Os dados indicam que, entre 2009 e 2019, as mulheres sofreram 71,1% da violência interpessoal e autopraticada, enquanto os homens sofreram 28,9%. Dado que, segundo a [PNAD Contínuda de 2019](https://educa.ibge.gov.br/jovens/conheca-o-brasil/populacao/18320-quantidade-de-homens-e-mulheres.html), as mulheres representavam 51,8% da população brasileira (e que esse percentual não variou significativamente entre o período analisado), existe um claro desbalanço da violência sofrida (ou ao reportada) entre mulheres e homens. 
+
+Como esses dados de violência variaram ao longo dos 10 anos de análise?
+
+```{r women_relative_cases_per_year}
+
+# Construção de uma tabela (tibble) com o número de casos de violência sofridos pelas mulheres em relação ao total do número de casos
+casos_sexo_ano_percentual <- tb_violencia[, c("sexo_paciente_desc", "ano")] %>% 
+  count(ano, sexo_paciente_desc, sort = FALSE) %>%
+  filter(sexo_paciente_desc == "Feminino") %>%
+  select(-sexo_paciente_desc) %>%
+  rename(., pacientes_fem = "n") %>%
+  # Unir a tabela de pacientes do sexo feminino com o total
+  left_join(
+    tb_violencia[, c("sexo_paciente_desc", "ano")] %>%
+      filter(sexo_paciente_desc != "" & !is.na(sexo_paciente_desc)) %>%
+      group_by(ano) %>%
+      summarise(total = n()), by = c("ano" = "ano")) %>%
+  mutate(percentual_fem = pacientes_fem/total,
+         percentual_masc = 1 - percentual_fem,
+         ano = as.factor(ano))
+
+# Visualizar a tabela 
+view(casos_sexo_ano_percentual)
+
+```
+
+```{r women_relative_cases_per_year_plot}
+
+# Criar o gráfico de linha que mostra a variação percentual de pacientes do sexo feminino entre 2009 e 2019
+ggplot(data = casos_sexo_ano_percentual, aes(x = ano, 
+                                             y = percentual_fem,
+                                             group = 1)) +
+  geom_line(color = "#0099f9", size = 2) +
+  geom_point(color = "#0099f9", size = 4) +
+  geom_label(
+    aes(label = percent(percentual_fem, 0.01)),
+    size = 3,
+    color = "grey7"
+  ) +
+  labs(title = "Variação do percentual de pacientes do sexo feminino em relação ao total de pacientes",
+       subtitle = "De 2009 a 2019",
+       caption = "Fonte: SINAN",
+       x = "Ano",
+       y = "Percentual de pacientes do sexo feminino")
+
+``` 
+
+O gráfico indica que o houve um crescimento do percentual de casos de violência que as mulheres sofreram em relação ao total de casos no período analisado. Houve variações significativas entre 2010 e 2011 (aumento de 3 pontos percentuais), 2014 e 2015 (queda de 3 p.p.) e 2015 e 2016 (aumento de 2,5 p.p.). Após esse período de considerável variação, há uma leve tendência de queda desde 2016.
+
+Dadas as análises feitas acima, vale a pena investigar como os tipos de violência sofridas por homens e mulheres se diferem. Antes de fazer essa análise, porém, é importante avaliar se o dado da subcategoria do CID-10 variou significativamente ao longo dos anos, dado que o percentual de valores não nulos dessa variável na base está apenas na casa dos 20%.
+
+```{r cid_subcatedoria_n_nas}
+
+cid_subcategoria_nna <- tb_violencia[, c("descricao_subcategoria", "ano")] %>%
+  group_by(ano) %>%
+  summarise(contagem = n()) %>%
+  left_join(
+    tb_violencia[, c("descricao_subcategoria", "ano")] %>%
+      filter(!is.na(descricao_subcategoria)) %>%
+        group_by(ano) %>%
+  summarise(contagem_n_nas = n()),
+      by = c("ano" = "ano")) %>%
+  mutate(percentual_n_nas = percent(contagem_n_nas/contagem, 0.01))
+
+cid_subcategoria_nna
+
+```
+
+A tabela indica que a informação de categoria do CID-10 esteve presente em todos os anos da análise. Embora o percentual de valores não nulos tenha crescido de 17% para 22%, não existe diferença expressiva que limite a análise ao longo dos anos.
+
+Para investigar quais tipos de violência estão mais associadas a mulheres e hoemns, uma análise de um gráfico de nuvem de palavras (wordcloud) é útil.
+
+```{r wordcloud_violencia_text}
+
+# Cria um "Corpus" (coleção de palavras) associadas à subcategoria da violência sofrida por mulheres
+text_fem <- tb_violencia[, c("descricao_subcategoria", "sexo_paciente_desc")] %>% 
+  filter(!is.na(descricao_subcategoria) & sexo_paciente_desc == "Feminino") %>% 
+  select(descricao_subcategoria) %>%
+  as.data.frame(.) %>%
+  .$descricao_subcategoria
+
+
+# Cria um "Corpus" (coleção de palavras) associadas à subcategoria da violência sofrida por homens
+text_masc <- tb_violencia[, c("descricao_subcategoria", "sexo_paciente_desc")] %>% 
+  filter(!is.na(descricao_subcategoria) & sexo_paciente_desc == "Masculino") %>% 
+  select(descricao_subcategoria) %>%
+  as.data.frame(.) %>%
+  .$descricao_subcategoria
+
+```
+
+```{r wordcloud_violencia_df_fem, message=FALSE, warning=FALSE, results='hide'}
+
+memory.limit(size=1800)
+
+# Lista de algumas stop words que foram encontradas com certa frequência na base de subcategorias
+outras_stop_words = c("meio", "outra", "outras", "parte", "especificada", "especificadas", "classificados", "especificado")
+
+# Cria um documento com a frequência de palavras associadas à subcategoria de violência sofrida por mulheres
+docs_palavras_fem <- Corpus(VectorSource(text_fem)) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(., content_transformer(tolower)) %>%
+  tm_map(., removeWords, c(stopwords("portuguese"), outras_stop_words))
+
+# Cria um DataFrame com as palavras mais frequentes
+dtm_palavras_fem <- TermDocumentMatrix(docs_palavras_fem)
+matrix_palavras_fem <- as.matrix(dtm_palavras_fem)
+palavras_fem <- sort(rowSums(matrix_palavras_fem), decreasing = TRUE)
+df_palavras_fem <- data.frame(word = names(palavras_fem), freq = palavras_fem)
+
+
+```
+
+O mesmo processo é repetido para pessoas do sexo masculino.
+
+```{r wordcloud_violencia_df_masc, results='hide', message=FALSE, warning=FALSE}
+
+memory.limit(size=1800)
+
+# Cria um documento com a frequência de palavras associadas à subcategoria de violência sofrida por homens
+docs_palavras_masc <- Corpus(VectorSource(text_masc)) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(., content_transformer(tolower)) %>%
+  tm_map(., removeWords, c(stopwords("portuguese"), outras_stop_words))
+
+# Cria um DataFrame com as palavras mais frequentes
+dtm_palavras_masc <- TermDocumentMatrix(docs_palavras_masc)
+matrix_palavras_masc <- as.matrix(dtm_palavras_masc)
+palavras_masc <- sort(rowSums(matrix_palavras_masc), decreasing = TRUE)
+df_palavras_masc <- data.frame(word = names(palavras_masc), freq = palavras_masc)
+
+```
+
+```{r wordcloud_plot_fem}
+
+# Nuvem de palavras de violência associada às mulheres
+wordcloud2(data = df_palavras_fem, size = 0.75, color = "random-dark")
+
+```
+
+No caso das mulheres, as palavras "agressão", "residência", "força",  "corporal" e "sexual" são as que mais se destacam, o que pode indicar que boa parte da violência sofrida pelas mulheres é a doméstica com o uso da força física.
+
+```{r meio_forca_distribuicao}
+
+# Tabela com o percentual de violência por força sofrida por homens e mulheres com o percentual relativo a cada sexo
+tb_violencia[, c("sexo_paciente_desc", "meio_forca_desc")] %>%
+    filter(!is.na(sexo_paciente_desc) & !is.na(meio_forca_desc)) %>%
+  group_by( sexo_paciente_desc, meio_forca_desc) %>%
+  summarise(numero_casos = n()) %>%
+  mutate(freq = formattable::percent(numero_casos / sum(numero_casos))) %>%
+  rename(., sexo = sexo_paciente_desc, meio_forca = meio_forca_desc)
+
+```
+
+A tabela acima reforça que a força foi mais utilizada como meio de violência em vítimas do sexo feminino comparativamente ao masculino, dado que em 51,7% dos casos de violência contra mulher a violência foi utilizada, enquanto esse número foi de apenas 36% para os homens.
+
+```{r wordcloud_plot_masc, results='hide'}
+
+# Nuvem de palavras de violência associada aos homens
+wordcloud2(data = df_palavras_masc, size = 0.75, color = "random-dark")
+
+```
+
+![nuvem de palavras para homens - colocada como imagem devido a um bug não identificado na conversão do arquivo para HTML](C:\Users\Yuri\Downloads\Insper\R para Ciência dos Dados\word_cloud_men.png)
+
+Já no caso dos homens, as 5 palavras que mais se repetem são "agressão", "residência", "negligência", "abandono" e "pais", o que sugere que, além da agressão, comum a homens e mulheres, há uma quantidade significativa de casos de violência com crianças do sexo masculino, evidenciada pelas palavras "negligência" e "abandono". Para ter mais confiança acerca da veracidade dessa hipótese, prosseguimos com uma análise quantitativa da distribuição de pacientes do sexo masculino por idade.
+
+```{r male_age_distribution}
+
+distribuicao_idade_homens <- tb_violencia[ , c("sexo_paciente_desc", "idade_paciente")] %>%
+  filter(sexo_paciente_desc == "Masculino" & !is.na(idade_paciente)) %>%
+  count(idade_paciente, sort = FALSE, name = "casos") %>%
+  rename(., idade = idade_paciente) %>%
+  mutate(grupos_idade = ifelse(idade >= 60, "Idoso", ifelse(idade >= 30, "Adulto", ifelse(idade >= 18, "Jovem Adulto", ifelse(idade >= 13, "Adolescente", "Criança"))))) %>%
+  group_by(grupos_idade) %>%
+  summarise(numero_casos = sum(casos)) %>%
+  arrange(match(grupos_idade, c("Criança", "Adolescente", "Jovem Adulto", "Adulto", "Idoso"))) %>%
+  mutate(percentual = numero_casos/sum(numero_casos),
+         ymax = cumsum(percentual),
+         ymin = c(0, head(ymax, n = -1)),
+         posicao = (ymax + ymin)/2,
+         legenda = paste(grupos_idade, "\n", percent(percentual, 0.1)))
+
+```
+
+```{r male_age_distribution_donut}
+
+ggplot(distribuicao_idade_homens, aes(ymax = ymax, ymin = ymin, xmax = 3, xmin = 4, 
+                     fill = grupos_idade)) +
+  geom_rect(color = "gray14") +
+  geom_label(x = 3.5, aes(y = posicao, label = legenda), size = 4.5,
+             color = "gray7") +
+  coord_polar(theta = "y") +
+  xlim(c(1.5, 4)) +
+  labs(title = "Distribuição dos pacientes do sexo masculino por faixa etária",
+    subtitle = "De 2009 a 2019",
+    caption = "Fonte: SINAN") +
+  theme_void() +
+  theme(legend.position = "none")
+
+```
+
+O gráfico de rosca reforça a hipótese de que provavelmente há *viés de seleção* nos dados, pois há uma desproporcionalidade de casos entre adolescentes e crianças em relação ao percentual da população dessas faixas etárias. [De acordo com dados do IBGE](https://educa.ibge.gov.br/jovens/conheca-o-brasil/populacao/18318-piramide-etaria.html), em 2019, homens de até 19 anos representavam cerca de 13% da população masculina, enquanto na análise da violência pessoas do sexo masculino com até 18 anos representaram 43% dos pacientes de violência. E embora em anos anteriores a 2019 a proporção de crianças e adolescentes fosse maior, ainda era significativamente inferior a 43%, o que evidencia que esse grupo ou sofre mais violência ou reporta-a com mais frequência que outro grupos etários masculinos - a segunda hipótese é a mais factível.
+
+```{r female_age_distribution}
+
+distribuicao_idade_mulheres <- tb_violencia[ , c("sexo_paciente_desc", "idade_paciente")] %>%
+  filter(sexo_paciente_desc == "Feminino" & !is.na(idade_paciente)) %>%
+  count(idade_paciente, sort = FALSE, name = "casos") %>%
+  rename(., idade = idade_paciente) %>%
+  mutate(grupos_idade = ifelse(idade >= 60, "Idoso", ifelse(idade >= 30, "Adulto", ifelse(idade >= 18, "Jovem Adulto", ifelse(idade >= 13, "Adolescente", "Criança"))))) %>%
+  group_by(grupos_idade) %>%
+  summarise(numero_casos = sum(casos)) %>%
+  arrange(match(grupos_idade, c("Criança", "Adolescente", "Jovem Adulto", "Adulto", "Idoso"))) %>%
+  mutate(percentual = numero_casos/sum(numero_casos),
+         ymax = cumsum(percentual),
+         ymin = c(0, head(ymax, n = -1)),
+         posicao = (ymax + ymin)/2,
+         legenda = paste(grupos_idade, "\n", percent(percentual, 0.1)))
+
+```
+
+```{r female_age_distribution_donut}
+
+ggplot(distribuicao_idade_mulheres, aes(ymax = ymax, ymin = ymin, xmax = 3, xmin = 4, 
+                     fill = grupos_idade)) +
+  geom_rect(color = "gray14") +
+  geom_label(x = 3.5, aes(y = posicao, label = legenda), size = 4.5,
+             color = "gray7") +
+  coord_polar(theta = "y") +
+  xlim(c(1.5, 4)) +
+  labs(title = "Distribuição dos pacientes do sexo femino por faixa etária",
+    subtitle = "De 2009 a 2019",
+    caption = "Fonte: SINAN") +
+  theme_void() +
+  theme(legend.position = "none")
+
+```
+
+Quando se analisa essa mesma distribuição de violência entre mulheres de acordo com a faixa etária, fica claro que a desproporcionalidade no número de casos de violência sofrida por crianças e adolescentes é específico do sexo masculino, já que, no sexo feminino, isso o percentual de pacientes pertences a esses dois grupos representa 29,1% do total, quase 14 pontos percentuais inferior à representatividade desses mesmos grupos no sexo masculino. 
+
+```{r male_age_distribution_year}
+
+tb_violencia[ , c("ano", "sexo_paciente_desc", "idade_paciente")] %>%
+  filter(sexo_paciente_desc == "Masculino" & !is.na(idade_paciente)) %>%
+  rename(., idade = idade_paciente) %>%
+  group_by(ano) %>%
+  mutate(ano = as.character(ano)) %>%
+  ggplot(aes(x=ano, y=idade, fill=ano)) +
+  geom_boxplot() +
+  theme(legend.position = "none")
+
+
+```
+
+Além disso, o *boxplot* acima reforça a hipótese e indica que não houve variações expressivas e abruptas na distribuição da idade de pacientes do sexo masculino de ao longo dos anos (talvez com exceção de 2014). Essa evidência também reforça que comparar a soma do número de pacientes ao longo dos anos de acordo com seus grupos etários, como foi feito no gráfico de rosca, não é um procedimento metodologicamente errado.
+
+De modo geral, o tipo mais comum de violência entre ambos os sexos é a agressão, que pode ser de diversas formas. Além disso, boa parte dos casos de violência - seja ela proposital ou não - geralmente ocorre na própria residência da vítima. O que difere homens e mulheres de maneira mais expressiva é que pessoas do sexo feminino sofrem um percentual maior de violência física e sexual, enquanto as do sexo masculino enfrentam mais problemas, em termos relativos, de negligência e abandono de seus pais e responsáveis.
+
+A despeito da possibilidade real de viés de seleção dos dados, partindo do pressuposto de que os dados de fato refeltem a distribuição da violência na população brasileira, percebe-se que as mulheres representam o maior número casos de violência de modo desproporcional à distribuição da população. A partir disso, queremos investigar mais a fundo os fatores que compõem e influenciam a violência sofrida por esse grupo.
+
+## Análise da violência sofrida por pessoas sexo feminino
+
+### Com enfoque no aspecto racial
+
+```{r mulheres_raca}
+
+violencia_mulheres_raca <- tb_violencia[c("sexo_paciente_desc", "raca_paciente_desc")] %>%
+  filter(sexo_paciente_desc == "Feminino" & !is.na(raca_paciente_desc)) %>%
+  group_by(raca_paciente_desc) %>%
+  summarise(numero_casos = n()) %>%
+  arrange(., desc(numero_casos)) %>%
+  mutate(freq = formattable::percent(numero_casos / sum(numero_casos)),
+           legenda = paste(numero_casos, "\n", freq))
+
+```
+
+```{r mulheres_raca_plot}
+
+violencia_mulheres_raca %>%
+   ggplot(aes(x = reorder(raca_paciente_desc, -numero_casos), y = numero_casos, fill = raca_paciente_desc)) +
+         geom_col() +
+   scale_y_continuous(labels = comma) +
+  geom_label(aes(y = c(465000, 425000, 90000, 90000, 90000), label = legenda), label.padding = unit(0.4, "lines")) +
+         theme(legend.position = "none") +
+         labs(title = "Número de casos de mulheres por raça",
+              x = "",
+              y = "",
+              subtitle = "De 2009 a 2019",
+              caption = "Fonte: SINAN")
+
+
+```
+
+Percebe-se que as mulheres brancas são as que mais sofreram violência entre 2009 e 2019, com mais de 930 mil casos registrados. Depois, aparecem as mulheres pardas, com 845 mil casos; e as pretas, com quase 180 mil casos reportados. Considerando o ano de 2015 como um generalizador válido do período analisado, a distribuição da violência entre as raças parece não divergir significativamente da distribuição que elas representam do total da população, já que, de acordo com dados de [2015 da PNAD](https://www.ipea.gov.br/retrato/indicadores_populacao.html), as mulheres brancas representvam 46,4% da população feminina; as pardas 44,1%; e as negras 8,6%, números próximos aos percentuais indicados no gráfico. Desse modo, à primeira vista, a cor ou raça não interferem na distribuição da violência entre mulheres.
+
+Entretanto, essa hipótese pode ser investigada com mais detalhes com mais segmentações entre os diferentes grupos raciais, como faixa etária e escolaridade. Nas análises abaixo, mulheres de raça/cor indígena e amarela serão removidas da análise por representarem um percentual muito baixo da população feminina brasileira.
+
+```{r mulheres_raca_faixa_etaria}
+
+# Remoção das raças "indígena" e "amarela" da análise
+racas_selecionadas <- c("Branca", "Parda", "Preta")
+
+mulheres_raca_faixa_etaria <- tb_violencia[c("sexo_paciente_desc", "raca_paciente_desc", "idade_paciente")] %>%
+  filter(sexo_paciente_desc == "Feminino" & !is.na(raca_paciente_desc) & raca_paciente_desc %in% racas_selecionadas) %>%
+  mutate(grupos_idade = ifelse(idade_paciente >= 60, "Idoso", ifelse(idade_paciente >= 30, "Adulto", ifelse(idade_paciente >= 18, "Jovem Adulto", ifelse(idade_paciente >= 13, "Adolescente", "Criança"))))) %>%
+  group_by(raca_paciente_desc, grupos_idade) %>%
+  summarise(numero_casos = n()) %>%
+  filter(!is.na(grupos_idade)) %>%
+  mutate(freq = formattable::percent(numero_casos / sum(numero_casos))) %>%
+  arrange(., desc(numero_casos))
+
+mulheres_raca_faixa_etaria
+
+```
+
+```{r mulheres_raca_faixa_etaria_plots}
+
+ggplot(mulheres_raca_faixa_etaria, aes(fill = grupos_idade, y  = numero_casos, x = reorder(raca_paciente_desc, -numero_casos), label = freq)) +
+    geom_bar(position="fill", stat="identity", width=0.9) +
+  scale_y_continuous(labels = scales::percent)  +
+           labs(title = "Número de casos de mulheres por raça e faixa etária",
+              x = "",
+              y = "",
+              subtitle = "De 2009 a 2019",
+              caption = "Fonte: SINAN",
+              fill = "Grupos Etários")
+
+```
+
+Com a segmentação do número de casos por grupos etários, nota-se que não há diferença significativa entre as raças. Pode-se destacar que, entre mulheres negras, a violência contra adultos ocorre em maior proporção em relação os demais grupos de maneira signficativa (39,5%) e que a violência contra crianças é maior em pessoas brancas (5,84%). Todavia, essa diferença pode estar mais relacionada à distribuição etária das mulheres em cada raça do que propriamente a uma distinção de como a violência é distribuída entre os grupos etários. Outro fator que pode explicar essa aparente ausência de diferenciação entre os grupos é, novamente, o viés de seleção, pois talvez os casos de violência sofrida por mulheres pretas e pardas seja subnotificado.
+
+### Escolaridade
+
+```{r education_women}
+
+escolaridade_violencia <- tb_violencia[c("sexo_paciente_desc", "escolaridade_paciente_desc")] %>%
+  filter(!is.na(escolaridade_paciente_desc), sexo_paciente_desc == "Feminino" & escolaridade_paciente_desc != "Não se aplica") %>%
+  group_by(escolaridade_paciente_desc) %>%
+  summarise(numero_casos = n()) %>%
+  mutate(freq = formattable::percent(numero_casos / sum(numero_casos)),
+         legenda = paste(escolaridade_paciente_desc,"\n", freq))
+
+```
+
+```{r education_women_treemap}
+
+treemap(escolaridade_violencia,
+            index = "legenda",
+            vSize = "numero_casos",
+            type="index",
+        palette = "Set1",
+        title = "Número de pacientes do sexo feminino por escolaridade",
+        border.lwds=c(3, 2)
+            )
+
+```
+
+Os dados indicam que mulheres com ensino fundamental 2 incompleto são as que mais sofrem violência, com quase 26% de todos os casos, seguidas daquelas com ensino médio completo (21,8%) e com ensino méido incompleto (15,58%). O grupo que menos sofre violência - e que também representa uma parcela menor da população feminina - são as pessoas que completarem (4,24%) e não completaram (4,08%) o ensino superior. É difícil extrair conclusões desses dados, pois a distribuição assemelha-se à distribuição do grau de formação de mulheres no Brasil.
+
+### Origem da violência
+
+```{r violence_origin_women_general}
+
+tb_violencia[c("sexo_paciente_desc", "motivacao_violencia_desc")] %>%
+  filter(!is.na(motivacao_violencia_desc), sexo_paciente_desc == "Feminino" & motivacao_violencia_desc != "Não se aplica" & motivacao_violencia_desc != "Outros") %>%
+  group_by(motivacao_violencia_desc) %>%
+  summarise(numero_casos = n()) %>%
+  mutate(freq = formattable::percent(numero_casos / sum(numero_casos))) %>%
+  rename(., motivacao_violencia = motivacao_violencia_desc) %>%
+  arrange(., desc(numero_casos))
+
+```
+
+Quando analisamos os fatores que explicam a motivação da violência contra mulheres desconsiderando "Outros" e "Não se aplica", o sexismo é o mais relevante deles, com 50% dos casos reportados. Outro motivador bastante com da violência é o conflito geracional, que representa 38,1% dos casos na base. Vale, por fim, entender quem são os agentes causadores da violência contra as mulheres - a suspeita inicial, pela análise da motivação, é que sejam conjugues, namorados e familiares.
+
+```{r violence_origin_women_autor}
+
+autor_violencia_mulher <- tb_violencia[c("sexo_paciente_desc", "autor_mae", "autor_pai", "autor_padrasto", "autor_madrasta", "autor_conjugue", "autor_ex_conjugue", "autor_namorado_a", "autor_ex_namorado_a", "autor_filho_a", "autor_desconhecido")] %>%
+  filter(sexo_paciente_desc == "Feminino") %>%
+  mutate(autor_mae = sum(autor_mae, na.rm = TRUE),
+         autor_pai = sum(autor_pai, na.rm = TRUE),
+         autor_padrasto = sum(autor_padrasto, na.rm = TRUE),
+         autor_madrasta = sum(autor_madrasta, na.rm = TRUE),
+         autor_conjugue = sum(autor_conjugue, na.rm = TRUE),
+         autor_ex_conjugue = sum(autor_ex_conjugue, na.rm = TRUE),
+         autor_namorado_a = sum(autor_namorado_a, na.rm = TRUE),
+         autor_ex_namorado_a = sum(autor_ex_namorado_a, na.rm = TRUE),
+         autor_filho_a = sum(autor_filho_a, na.rm = TRUE),
+         autor_desconhecido = sum(autor_desconhecido, na.rm = TRUE)) %>%
+  slice(., 1) %>%
+  t(.) %>%
+  .[-1, ] %>%
+  as.data.frame(.)
+
+
+autor_violencia_mulher <- tibble::rownames_to_column(autor_violencia_mulher)
+colnames(autor_violencia_mulher) <- c("autor", "numero_casos")
+autor_violencia_mulher$numero_casos <- as.numeric(autor_violencia_mulher$numero_casos)
+
+```
+
+```{r violence_origin_women_autor_plot}
+
+autor_violencia_mulher %>%
+  ggplot(aes(x=reorder(autor, numero_casos), 
+             y=numero_casos, 
+             fill=autor,
+             na.rm = TRUE)) +
+  geom_bar(stat='identity') +
+  labs(x = "Autor", y = "", title = "Raça dos pacientes") +
+  coord_flip() +
+  scale_y_continuous(labels = comma) +
+  theme(legend.position = "none") +
+  geom_text(aes(label=numero_casos), vjust=0.5) +
+  labs(x= "Autor", y= "", color= "",
+        title = "Quantidade de pacientes do sexo feminino por autor da violência",
+        subtitle = paste0("Valores absolutos de ", min(tb_violencia$ano), " até ", max(tb_violencia$ano)),
+        caption = "Fonte: SINAN") 
+
+```
+
+O gráfico acima indica que, de fato, boa parte da violência sofrida pelas mulheres é praticada por conjugues, ex-conjugues, namorados, ex-namorados e familiares. O conjugue, por exemplo, é o grupo com maior casos reportados - 296 mil, seguido de autor desconhecido (136 mil), mãe (117 mil) e ex-conjugue (111 mil).
+
+
+## Análise dos casos de violencia entre homens e mulheres, segmentados por raça
+
+Entendido as particulariedades dos grupos, resolvemos nos aprofundar nos agravantes que giram em torno da violência. Para isso usaremos o recurso de gráfico chamado "Spider Plot" ou simplesmente gráfico de radar. No caso, será possível listar algumas características dos casos de violência e contar de forma dinâmica como cada grupo presenciou cada agravante.
+
+Abaixo foi criado uma função que gera os gráficos que serão analisados:
+
+```{r agravante_violencia_function}
+
+gerar_spider_violencia <- function(tabela, titulo,list_var,col_categoria) {
+  # Criacao da Base de dados para o spider - retirando duplicados
+  spider_crime <-  tabela[,list_var] %>% drop_na
+  # retirando valores diferentes de 1 e 0 
+  spider_crime[,-1][spider_crime[,-1] != 1] <-0
+  
+  #criando variaveis genericas
+  count_pop <- spider_crime %>% group_by({{col_categoria}}) %>% summarise(n()) %>% data.frame
+  classes_legenda <- spider_crime[[1]] %>% unique
+  
+  # group by
+  spider_crime <-   spider_crime %>% 
+                      group_by({{col_categoria}}) %>% 
+                      summarise(across(everything(), sum)) %>% eval
+  spider_crime <- spider_crime %>% data.frame
+  spider_crime <-spider_crime[,-1]/count_pop$n..
+  
+  # As duas primeiras linhas são referentes ao limite máximo e limite mínimo
+  cols_limit <- spider_crime %>% ncol
+  spider_crime <-rbind(rep(1,cols_limit) , rep(0,cols_limit) , spider_crime)
+  
+  # Cores das classes
+  colors_border=c( rgb(0.8,0.2,0.5,0.9) ,rgb(0.2,0.5,0.5,0.9) )
+  colors_in=c( rgb(0.8,0.2,0.5,0.4), rgb(0.2,0.5,0.5,0.4)  )
+  
+  # Criação do gráfico
+  spider_crime %>% 
+    radarchart(axistype=1, 
+               # Polígono
+               pcol=colors_border , pfcol=colors_in , plwd=4, plty=1 , 
+               # Grid do gráfico
+               cglcol="grey", cglty=1, axislabcol="grey", cglwd=1.1,
+               # Tamanho dos rótulos
+               vlcex=0.6
+    )
+  #Legenda e Título
+  legend(x=1.5, y=1.2, legend = classes_legenda, bty = "n", pch=20 , col=colors_border , text.col = "black", cex=0.9, pt.cex=1.6)
+  title(titulo)
+}
+
+```
+
+Dito isso, seguimos para a visualização de agravantes de violência. Para entender a visualização, imagine que cada vértice do polígno seja uma característica da violência reportada. O gráfico em si mostra a porcentagem de cada vértice em relação ao número total de casos por grupo. Ou seja, se no vértice de "ocorreu violência física" para mulheres foi de 50%, significa que 50% dos casos reportados por mulheres tiveram algum tipo de violência física.
+Abaixo é apresentado um gráfico de radar separado pelos grupos "Feminino" e "Masculino":
+
+``` {r agravante_violencia_geral}
+
+var_usadas_agressao <- c('sexo_paciente_desc'
+                ,'ocorreu_violencia_fisica'
+                ,'ocorreu_violencia_psicologica'
+                ,'lesao_autoprovocada'
+                ,'meio_arma_fogo'
+                ,'houve_estupro'
+                ,'houve_pornografia_infantil'
+                ,'houve_exploracao_sexual'
+                ,'houve_assedio'
+                ,'meio_enforcamento'
+                ,'meio_objeto_contundente'
+                ,'meio_objeto_perfurante'
+                ,'meio_envenenamento')
+gerar_spider_violencia(tb_violencia,paste('Agravantes dos relatos de violência - Geral'),var_usadas_agressao,sexo_paciente_desc)
+
+```
+
+No geral, o ato de violência está majoritariamente associado à violência física, e isso não se diferencia por grupo. O que chama atenção é como as mulheres estão relativamente mais sucetíveis a casos como violência psicológica, estupro e assedio. Enquanto isso, quando o meio é arma de fogo, objeto perfurante ou a lesão é auto provocada, o grupo dos homens possui está mais vunerável proporcionalmente.
+
+Podemos ampliar essa visão apenas segregando a base por raça.
+
+``` {r agravante_violencia_brancos}
+
+raca='Branca'
+gerar_spider_violencia(tb_violencia%>% filter(raca_paciente_desc==raca),paste('Agravantes dos relatos de violência - População',raca),var_usadas_agressao,sexo_paciente_desc)
+
+```
+
+A população branca apresenta um comportamento muito parecido com a média. Isso se deve porque já foi comprovado uma grande presença de pessoas brancas na base. Com certeza, esse efeito desloca a média para uma situação mais parecida com o cenário de violência em que a população branca foi vítima.
+Vamos ver se esse cenário de próximo a média tende a se repetir a população parda:
+
+``` {r agravante_violencia_pardos}
+
+raca='Parda'
+gerar_spider_violencia(tb_violencia%>% filter(raca_paciente_desc==raca),paste('Agravantes dos relatos de violência - População',raca),var_usadas_agressao,sexo_paciente_desc)
+
+```
+
+Como previsto, a população parda também tem a mesma distribuição. De fato, por não se tratar de um grupo considerado uma "minoria" racial, brancos e pardos podem ter comportamento muito semelhante. É claro que é possível ver um pequeno aumento em casos de estupro para mulheres pardas em relação ao grupo de pessoas brancas, mas as diferenças são pequenas.
+
+A hipótese é que a questão étnica seja mais agravante, como no caso de pretos e indígenas
+
+``` {r agravante_violencia_preta}
+
+raca='Preta'
+gerar_spider_violencia(tb_violencia%>% filter(raca_paciente_desc==raca),paste('Agravantes dos relatos de violência - População',raca),var_usadas_agressao,sexo_paciente_desc)
+
+```
+
+Nesse grafico voltado a população negra, notamos que a violencia fisica se desloca para quase 70% dos casos, assim, temos que a violencia fisica aparenta ser mais incidente contra negros do que contra brancos. Para mulheres, houve um leve aumento relativo a casos de estupro  e também a  psicológica sofrida por mulheres se deloca um pouco, ultrapassando mais de 30% dos casos. Para homens negros, os casos de objeto perfurante também ficam um pouco maiores em relação a média.
+
+Por fim, analisamos a população indígena.
+
+``` {r agravante_violencia_indigena}
+
+raca='Indígena'
+gerar_spider_violencia(tb_violencia%>% filter(raca_paciente_desc==raca),paste('Agravantes dos relatos de violência - População',raca),var_usadas_agressao,sexo_paciente_desc)
+
+```
+
+Para os indígenas, os agravantes de violência mudam bastante. Inicialmente, notamos que os casos reportados de violência física contra indígenas são maiores que a população negra e branca proporcionalmente, alcaçando um número superior a 75% para homens. Ainda nos homens indígenas, temos que violencia por objeto perfurante ultrapassa 25% dos casos, enquanto nos outros grupos não chegava a 20%. Nas mulheres indígenas, os casos de estupros ficam mais comuns, porém casos de lesões autoprovocadas mais raros.
+
+Essa análise foi interessante para explorar e entender como cada grupo está sucetível a violência, porém notamos que talvez o autor da violência também possa variar conforme o grupo alvo.
+
+Abaixo a visão de tipo de autores de violência propocionais a grupos de homens e mulheres - ainda não discriminado por raça.
+
+``` {r autor_violencia_geral}
+
+#Criação de nova coluna binária se o autor é do sexo masculino
+tb_violencia <- tb_violencia %>%  mutate(autor_sexo_masculino= ifelse(autor_sexo_desc == 'Masculino' , 1,0))
+
+var_usadas_autor <- c('sexo_paciente_desc'
+                ,"autor_pai"                                     
+                ,"autor_mae"                                     
+                ,"autor_conjugue"                                
+                ,"autor_ex_conjugue"                             
+                ,"autor_namorado_a"                              
+                ,"autor_ex_namorado_a"                           
+                ,"autor_desconhecido"                            
+                ,"autor_conhecido"                               
+                ,"autor_institucional"                           
+                ,"autor_policial"                                
+                ,"autor_propria_pessoa"                          
+                ,"autor_sexo_masculino"
+                ,"autor_usou_alcool")
+
+
+gerar_spider_violencia(tb_violencia,paste('Descrição Agressor - Geral'),var_usadas_autor,sexo_paciente_desc)
+```
+
+De maneira geral, como já é conhecido, quem pratica violencia majoritariamente são pessoas do sexo masculino, independente do sexo. Para mulheres, 25% dos casos o autor é conjugue. Outro ponto interessante é muito mais fácil ser violentado por alguem conhecido do que por alguem desconhecido, independente do grupo
+
+Vamos apresentar a segregação novamente para os três grupos, na mesma sequencia. Primeiro falaremos sobre a população branca e parda.
+
+``` {r autor_violencia_brancos}
+
+raca='Branca'
+gerar_spider_violencia(tb_violencia%>% filter(raca_paciente_desc==raca),paste('Descrição Agressor - Vítima população',raca),var_usadas_autor,sexo_paciente_desc)
+
+```
+
+``` {r autor_violencia_pardos}
+
+raca="Parda"
+gerar_spider_violencia(tb_violencia%>% filter(raca_paciente_desc==raca),paste("Descrição Agressor - Vítima população",raca),var_usadas_autor,sexo_paciente_desc)
+
+```
+
+Novamente, temos uma distribuição muito parecida com a população como um todo.
+Seguimos para a população negra.
+
+``` {r autor_violencia_negros}
+
+raca="Preta"
+gerar_spider_violencia(tb_violencia%>% filter(raca_paciente_desc==raca),paste('Descrição Agressor - Vítima população',raca),var_usadas_autor,sexo_paciente_desc)
+
+```
+
+Para as mulheres negras, são quase 50% dos casos que houve violência quando o autor usou álcool. As mulheres negras sofreram mais violencias competidas por homen,s quase 75% dos casos - se igualando a mesma porcentagem de homens. Outro destaque é o aumento de violência cometida pelas mães da vítimas principalmente contra a população de homens negros, quase 25% dos casos -  o que leva a crer que enquanto homem negro, os agressores são 75% homens, mas quando o violentador é mulher, é quase certo que essa pessoa é a própria mãe da vitima.
+
+``` {r autor_violencia_indigena}
+
+raca="Indígena"
+gerar_spider_violencia(tb_violencia%>% filter(raca_paciente_desc==raca),paste("Descrição Agressor - Vítima população",raca),var_usadas_autor,sexo_paciente_desc)
+
+```
+
+Por fim, novamente as maiores diferenças se encontram na segmentação por indígenas. No caso, de homens indígenas, quase 80% dos casos de violência são cometidos por homens e quase 75% desses casos quando o autor está alcoolizado. Outro movimento interessante é pouca participação de agressões cometidas por familiares em relação a outros grupos. Por fim, para homens ingígenas, mais de 25% dos seus agressores são conhecidos - número bem maior do que em relação as outras etnias. Para as mulheres indígenas, percebe-se a mesma realidade quanto aos seus agressores que a mulheres negra vivencia: mais de 25% dos casos realizado por conjugues, com uma grande presença de agressores masculinos (75%) e alcoolizados (50%).
+
+## Visão por região
+
+Uma vez explorada a visão segmentada por diferentes grupos, sob óticas diferentes, cabe agora uma análise rápida de como os dados estão distribuídos ao longo do país. A fim de solucionar esse problema, foi feito um gráfico de barras empilhada, assim é possível ver a distribuição entre as regiões do país como um gráfico de pizza ao longo do tempo.
+
+``` {r regiao_stackedbar}
+
+tb_violencia %>% group_by(ano,regiao) %>% summarise(contagem=n(),.groups='drop') %>%
+ggplot(aes(fill=regiao, y=contagem, x=ano)) + 
+  geom_bar(position='fill', stat="identity",width=0.9)+
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_continuous(breaks= pretty_breaks())+
+  labs(x = "",
+       y = "Quantidade de pacientes",
+       title = "Distribuição dos dados segmentados por região e ano",
+       caption = "Source: SINAN",
+       fill='Região do Brasil') 
+
+```
+
+Majoritariamente, os dados estão concentrados no Sudesde, assim como a maior parte da população brasileira. O destaque foi o aumento proporcional dos casos da região Sul de 2009 para 2010 e depois ficou estabilizado. Em contra partida, os casos na região Centro-Oeste caíram de 25% para algo em torno de 15% ao longo dos anos. As demais regiões apresentaram um comportamento 
+constante.
+
+Apesar de uma leve mudança nos anos iniciais, podemos concluir que a distribuição de dados ao longo dos estados se seguiu constante. Uma segunda análise é chegar se a distribuição entre homens e mulheres muda de acordo com a região, bem como a distribuição de idades também.
+
+``` {r regiao_stackedbar_gender}
+
+tb_violencia %>% group_by(regiao,sexo_paciente_desc) %>% summarise(contagem=n(),.groups='drop') %>% drop_na() %>% 
+ggplot(aes(fill=sexo_paciente_desc, y=contagem, x=regiao)) + 
+  geom_bar(position='fill', stat="identity",width=0.9)+
+  scale_y_continuous(labels = scales::percent) +
+  #scale_x_continuous(breaks= pretty_breaks())+
+  labs(x = "",
+       y = "Quantidade de pacientes",
+       title = "Distribuição dos dados segmentados por região e sexo do paciente",
+       caption = "Source: SINAN",
+       fill='Sexo') 
+
+```
+
+```{r age_distribuition_regiao}
+
+tb_violencia[ , c("regiao", "idade_paciente")] %>%
+  filter(!is.na(idade_paciente)) %>%
+  rename(., idade = idade_paciente) %>%
+  group_by(regiao) %>%
+  mutate(regiao = as.character(regiao)) %>%
+  ggplot(aes(x=regiao, y=idade, fill=regiao)) +
+  geom_boxplot() +
+    labs(x = "",
+       y = "Idade",
+       title = "Distribuição dos dados segmentados por região e idade do paciente",
+       caption = "Source: SINAN") +
+  theme(legend.position = "none")
+
+
+```
+
+Em ambos os gráficos, a região Norte se destaca em relação as demais regiões. No caso, existem mais ocorrências de violencia para vítimas do sexo feminino em idades menores. Visto esse comportamento, vale a pena analisar como as etnias estão distribuídas por região e, mais adiante, como é a natureza de cada violência para entender melhor esse fenômeno.
+
+``` {r regiao_stackedbar_raca}
+
+tb_violencia %>% group_by(regiao,raca_paciente_desc) %>% summarise(contagem=n(),.groups='drop') %>% drop_na() %>% 
+ggplot(aes(fill=raca_paciente_desc, y=contagem, x=regiao)) + 
+  geom_bar(position='fill', stat="identity",width=0.9)+
+  scale_y_continuous(labels = scales::percent) +
+  #scale_x_continuous(breaks= pretty_breaks())+
+  labs(x = "",
+       y = "Quantidade de pacientes",
+       title = "Distribuição dos dados segmentados por região e sexo do paciente",
+       caption = "Source: SINAN",
+       fill='Raça') 
+
+```
+
+Talvez a presença desse grupo, que está sucessitível a agressões divergentes aos demais grupos étnicos fosse o sufiente para justificar a porque a a região Norte estava se descolando das outras regiões. Porém a população indígena se concentra tanto no Norte quanto no Centro Oeste, região que não está diferente do resto da populaçao. Sendo assim, o problema não é exclusivo porque existem grupos distintos, mas porque a região Norte possui um padrão de violência diferente das demais regiões.
+
+Dito isso, faz sentido revisitar o gráfico de radar para ver se as conclusões mudam a depender da região que está localizada a ocorrência.
+
+``` {r agravante_violencia_regiao}
+
+gerar_spider_violencia(tb_violencia,paste('Agravantes dos relatos de violência - Geral'),var_usadas_agressao,sexo_paciente_desc)
+
+```
+
+``` {r agravante_violencia_regiaoNorte}
+
+gerar_spider_violencia(tb_violencia%>% filter(regiao=='Norte'),paste('Agravantes dos relatos de violência - Região Norte'),var_usadas_agressao,sexo_paciente_desc)
+
+```
+
+A região Norte consistentemente apresenta maior incidência de crimes como estupro, lesão autoprovocada e assedio para a população feminina - tanto em comparação com o gráfico geral quanto ao gráfico da própria população indígena. O que corrobora com a ideia que essa região possui uma dinâmica de crimes diferentes. 
+
+Por outro lado, para homens, os agravantes de cada tipo de violência são parecidos com o gráfico da população indígena.
+
+Podemos concluir, portanto, que as violências presentes na região Norte realmente se diferem do resto do Brasil e o fato da população indígena (grupo étnico que sofre com padrões de violência específicos) estar mais presente na região Norte, pode impactar no tipo de violência relatada na região. Porém também existe um efeito particular ao Norte - para uma mulher, mesmo sendo indígena, é mais provavél que ela sofra violência relacionada a estupro/assedio na região Norte do que no resto do Brasil.
+
+
+# Conclusão
+
+A análise dos dados da base do SINAN confirmou que a preocupação com a violência contra a mulher na sociedade brasileira é legítima, pois em todos os anos analisados, os casos de violência contra a mulher foram mais que duas vezes maiores do que os casos contra homens. Além disso, o percentual de violência sofrida por mulheres em relação ao total da população cresceu de 66,5% em 2009 para 71,5% em 2019, o que evidencia que as mulheres sofrem mais com a violência.
+
+E as distinções não são apenas quantitativas - elas também são qualitativas. Para os homens, o tipo de violência mais recorrente estava associada à violência sofrida por crianças e adolescentes, como abandono e negligência de pais e mães em relação aos filhos. Já as mulheres estavam muito mais associadas à violência sexual e à agressão com o uso de força corporal, o que se relaciona ao contexto de casos de violência doméstica que ocorrem no país.
+
+Essa hipótese é reiterada pelo fato de que, entre pessoas do sexo feminino, as principais motivações da violência são o sexismo e o conflito geracional. Isso se reflete no dado que indica que o principal autor de violências contra mulheres são os próprios conjugues e ex-conjugues, bem como das mães e dos pais.
+
+Regionalmente, a distribuição da violência é semelhante em todo o Brasil, com exceção da região Norte. Nela há a maior proporção de mulheres que sofrem com violência sexual, além de a região possuir a menor média de idade das vítimas de violência para ambos os gêneros. Os homens - em particular os indígenas - , por sua vez, são vítimas comuns de violência cometida com armas pontiagudas, um possível reflexo dos conflitos fundiários que existem na região.
+
+Por esses fatores, pode-se concluir que a violência contra mulher é expressiva e tem características particulares ao público que vivencia essas violências, especialmente na comparação regional. Entretanto, existe uma limitação a essa tese, pois é possível que exista um viés de seleção caso as mulheres reportem mais casos de violência do que homens, o que traria distorções nas conclusões obtidas neste estudo.
+
+
+# Bônus - Predição
+
+Nesta seção do trabalho, buscar-se-á resolver dois problemas de predição: um de classificação e outro de regressão. O primeiro deles é determinar se, a partir das informações coletadas pelo CID, é possível determinar se uma violência foi autoprovocada ou não. Já o problema de regressão será determinar a idade do paciente de acordo com as características observáveis na base do CID.
+
+## Violência autoprovocada
+
+```{r treino_teste}
+
+# Seleção das variáveis de interesse para a predição
+violencia_autoprovocada_dados <- tb_violencia[c("ano", "outras_vezes_ocorrencia_desc", "sexo_paciente_desc", "idade_paciente", "raca_paciente_desc", "escolaridade_paciente_desc", "estado_civil_paciente_desc", "lesao_autoprovocada_desc", "orientacao_sexual_paciente_desc")]  %>%
+  na.omit(.)
+
+# Conversão de todas as variáveis do tipo caractere para "factor"
+violencia_autoprovocada_dados[sapply(violencia_autoprovocada_dados, is.character)] <- lapply(violencia_autoprovocada_dados[sapply(violencia_autoprovocada_dados, is.character)], as.factor)
+
+set.seed(42)
+
+# Divisão dos conjuntos de treinamento e teste
+idx <- sample(1:nrow(violencia_autoprovocada_dados), size = round(0.5 * nrow(violencia_autoprovocada_dados)))
+
+treino <- violencia_autoprovocada_dados[idx, ]
+teste <- violencia_autoprovocada_dados[-idx, ]
+
+```
+
+```{r random_forest_viol_autoprovocada}
+
+set.seed(42)
+
+# Geração das random forest
+rf <- ranger(lesao_autoprovocada_desc ~ ., data = treino, probability = TRUE, num.trees = 250)
+
+# Cálculo da probabilidade de o paciente ter autoprovocado a violência sofrida
+prob_rf <- predict(rf, data = teste)$predictions[, 2]
+
+# Predição  (classificação) dos indivíduos
+predicao_violencia_autoprovocada_rf <- ifelse(prob_rf >= 0.5, "Sim", "Não")
+
+# Erro do teste 
+erro_teste_rf <- mean(predicao_violencia_autoprovocada_rf != teste$lesao_autoprovocada_desc) %>%
+  percent(., accuracy = .01)
+
+print(erro_teste_rf)
+
+```
+
+O modelo de Random Forest apresentou um erro de 22,59% ao classificar a violência como autoprovocada ou não-autoprovocada com 200 árvores e mais de 200 mil observações no conjunto de treinamento. Embora não seja uma performance ruim, não é possível confiar no modelo para tomar decisões, pois uma taxa de erro de 22,59% em certas investigações pode ser elevada demais.
+
+```{r confusion_matrix_viol_autoprovocada}
+
+# Tabela de confusão
+table(Predicted = predicao_violencia_autoprovocada_rf, Observed = teste$lesao_autoprovocada_desc)
+
+```
+
+Com a análise da tabela de confusão, fica claro que o modelo até apresentou uma razoável capacidade preditiva para os casos em que não houve violência autoaplicada (próxima  a 78%), mas ruim para os casos em que houve violência autoaplicada (taxa de acerto próxima a 58%).
+
+## Determinação da idade do paciente
+
+Para a determinação da idade dos pacientes, um problema de regressão, será utilizado o boosting, que é mais efetivo em corrigir o erro idiossincrático oriundo do viés comparativamente à random forest, ainda que não seja tão bom em corrigir a o erro oriundo da variância.
+
+```{r idade_paciente_boosting}
+
+set.seed(42)
+
+# Geração do modelo de boosting
+idade_boost <- gbm(idade_paciente ~ ., data = treino,
+             distribution = "gaussian",
+             n.trees = 250,
+             interaction.depth = 4,
+             shrinkage = 0.001)
+
+# Estimação da idade do paciente a partir do boosting
+predicao_idade_boost <- predict(idade_boost, newdata = teste, n.trees = 250)
+
+# Cálculo do EQM pelo modelo boosting
+RMSE_idade_boost <- round(sqrt(mean((predicao_idade_boost - teste$idade_paciente)^2)), 3)
+
+print(RMSE_idade_boost)
+
+```
+
+O erro quadrático médio do modelo usando boosting é de 14,8 anos aproximadamente. Essa é uma dispersão grande demais para os dados - afinal, existe uma grande diferença entre um paciente de 20 anos e um de 5. Desse modo, o modelo de boosting, com as variáveis utilizadas, também não apresentou desempenho satisfatório.
